@@ -1,0 +1,3 @@
+Pune: Partly cloudy, 28°C
+Mumbai: Humid, 32°C
+Bangalore: Clear, 24°C
