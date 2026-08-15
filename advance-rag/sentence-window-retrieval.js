@@ -1,26 +1,25 @@
 import "dotenv/config";
-
+import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { Document } from "@langchain/core/documents";
-import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { RunnableSequence } from "@langchain/core/runnables";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 
-async function createSentenceWindowDocs(text, windowSize) {
-  const cleanedText = text.replace(/\s+/g, " ");
+async function createSentenceWindowDocs(rawText, WINDOW_SIZE) {
+  const cleanedText = rawText.replace(/\s+/g, " ");
   const sentences = cleanedText.match(/[^.!?]+[.!?]+(\s|$)/g) || [cleanedText];
-  const docs = [];
+  const documents = [];
 
   for (let index = 0; index < sentences.length; index++) {
     const currSentence = sentences[index].trim();
     if (!currSentence) continue;
 
-    const start = Math.max(0, index - windowSize);
-    const end = Math.min(sentences.length, index - windowSize + 1);
+    const start = Math.max(0, index - WINDOW_SIZE);
+    const end = Math.min(sentences.length, index + WINDOW_SIZE + 1);
     const context = sentences.slice(start, end);
 
-    docs.push(
+    documents.push(
       new Document({
         pageContent: currSentence,
         metadata: {
@@ -30,7 +29,8 @@ async function createSentenceWindowDocs(text, windowSize) {
       }),
     );
   }
-  return docs;
+
+  return documents;
 }
 
 function metadataReplacementNode(docs) {
@@ -53,7 +53,7 @@ async function main() {
     A monthly stipend of $150 is provided to cover home internet and utilities. 
     Expense reports for this stipend must be submitted by the 25th of each month. 
     Late submissions will result in delayed payouts until the following cycle.
-  `;
+    `;
 
   const embedding = new OpenAIEmbeddings({
     model: "text-embedding-3-small",
@@ -68,10 +68,10 @@ async function main() {
     documents,
     embedding,
   );
-  const baseRetriever = await vectorStore.asRetriever({ k: 2 });
-  const prompt = await ChatPromptTemplate.fromTemplate(
-    `You are an helpfull AI assitent, answer the question by using only the context provided below
-    
+  const baseRetriever = vectorStore.asRetriever({ k: 2 });
+  const prompt = ChatPromptTemplate.fromTemplate(
+    `You are an helpfull AI assistant, please answer the question by only using the below context.
+        
     Context:
     {context}
 
@@ -79,19 +79,19 @@ async function main() {
     {question}
     `,
   );
-  const promtChain = await RunnableSequence.from([
+  const promptChain = await RunnableSequence.from([
     prompt,
     llm,
     new StringOutputParser(),
   ]);
   const query =
     "What happens if I submit my internet bill expense on the 26th?";
-  const retrievedDocsFromVectorDb = await baseRetriever.invoke(query);
-  const context = metadataReplacementNode(retrievedDocsFromVectorDb);
-  const result = await promtChain.invoke({
-    context: context,
+  const retrievedQuery = await baseRetriever.invoke(query);
+  const queryWithContext = metadataReplacementNode(retrievedQuery);
+  const result = await promptChain.invoke({
+    context: queryWithContext,
     question: query,
   });
-  console.log("result: ", result);
+  console.log("Result: ", result);
 }
 main();
