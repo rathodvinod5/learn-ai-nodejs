@@ -5,6 +5,7 @@ import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { Document } from "@langchain/core/documents";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
+import { RunnableSequence } from "@langchain/core/runnables";
 
 // --- 1. Sample documents ---
 const rawDocs = [
@@ -33,16 +34,16 @@ const queryVariation = ChatPromptTemplate.fromTemplate(
   `,
 );
 
-async function generateQueries(llm, question) {
-  const chain = queryVariation.pipe(llm).pipe(new StringOutputParser());
-  const raw = await chain.invoke({ question });
-  const variations = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+// async function generateQueries(llm, question) {
+//   const chain = queryVariation.pipe(llm).pipe(new StringOutputParser());
+//   const raw = await chain.invoke({ question });
+//   const variations = raw
+//     .split("\n")
+//     .map((line) => line.trim())
+//     .filter(Boolean);
 
-  return [question, ...variations];
-}
+//   return [question, ...variations];
+// }
 
 // --- 3. Run retrieval for each query and dedupe results ---
 async function multiQueryRetrieve(vectorStore, queries, k = 2) {
@@ -78,10 +79,19 @@ async function main() {
 
   // const userQuery = "How do I stop paying for my account?";
   const userQuery = "Does the phone works in offline mode";
-  const queries = await generateQueries(llm, userQuery);
+  // const queries = await generateQueries(llm, userQuery);
+  const queryChain = await RunnableSequence.from([
+    queryVariation,
+    llm,
+    new StringOutputParser(),
+  ]);
+  let queries = await queryChain.invoke({
+    question: userQuery,
+  });
   console.log(`\nOriginal query: "${userQuery}"\n`);
 
   console.log("Generated queries:");
+  queries = queries.split("\n").map((item) => item.trim());
   queries.forEach((q, i) => console.log(`  ${i + 1}. ${q}`));
 
   const results = await multiQueryRetrieve(vectorStore, queries, 2);
