@@ -1,5 +1,6 @@
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { Document } from "@langchain/core/documents";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { RunnableSequence } from "@langchain/core/runnables";
@@ -47,6 +48,19 @@ async function main() {
   const hydeDoc = await hydePromptChain.invoke({
     question: query,
   });
+
+  //   Alternative way, instead of RunnableSequence
+  //   const messages = [
+  //     new SystemMessage(
+  //       `You are an expert technical assistant. Your job is to write a hypothetical
+  //         highly detailed paragraph answering the user's question. Do not include any introductory
+  //         phrases like 'Here is the answer'. Write the technical document directly.`,
+  //     ),
+  //     new HumanMessage(query),
+  //   ];
+  //   const response = await llm.invoke(messages);
+  //   const hydeDoc = response.content;
+
   console.log("HydeDoc: ", hydeDoc);
   //   const result = await vectorStore.similaritySearch(hydeDoc);
   const result = await baseRetriever.invoke(hydeDoc);
