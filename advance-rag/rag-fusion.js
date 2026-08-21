@@ -1,10 +1,10 @@
-import "dotenv/config";
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
+import { Document } from "@langchain/core/documents";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { RunnableSequence } from "@langchain/core/runnables";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
-import { Document } from "@langchain/core/documents";
+import "dotenv/config";
 
 const rawDocs = [
   new Document({
@@ -41,30 +41,32 @@ const vectorStore = await MemoryVectorStore.fromDocuments(rawDocs, embedding);
 
 async function generateMultipleQueries(userQuery) {
   const multiQueryPrompt = ChatPromptTemplate.fromTemplate(
-    `You are an AI assistant. Generate 3 alternative versions of the 
-    following user query to retrieve relevant documents from a vector database.
-    Provide these alternative queries separated by newlines. 
+    `You are an AI assistence, please generate 3 alternate versions of given 
+    user query to fetch documnets from the vector database.
+
+    Prove these alternative queries seperated by newline, without any numbering as well.
     
-    Original query:
+    Original user query:
     {query}`,
   );
-  const multiQueryChat = await RunnableSequence.from([
+  const multiQueryChain = RunnableSequence.from([
     multiQueryPrompt,
     llm,
     new StringOutputParser(),
   ]);
-  let generatedQueries = await multiQueryChat.invoke({
+  let alternateQueries = await multiQueryChain.invoke({
     query: userQuery,
   });
-  generatedQueries = generatedQueries
+  alternateQueries = alternateQueries
     .split("\n")
-    .map((line) => line.replace(/^\d+\.\s*/, "").trim())
+    .map((lines) => lines.trim())
     .filter(Boolean);
-  return [userQuery, ...generatedQueries];
+
+  return [userQuery, ...alternateQueries];
 }
 
 async function reciprocalRankFusion(vectorDocs, k = 60) {
-  const rrScores = {};
+  const rrScore = {};
   const docMapping = {};
 
   vectorDocs.map((docs) => {
@@ -72,37 +74,34 @@ async function reciprocalRankFusion(vectorDocs, k = 60) {
       const contents = doc.pageContent;
       docMapping[contents] = doc;
 
-      if (!rrScores[contents]) rrScores[contents] = 0;
+      if (!rrScore[contents]) rrScore[contents] = 0;
 
-      rrScores[contents] += 1 / (k + (rank + 1));
+      rrScore[contents] += 1 / (k + (rank + 1));
     });
   });
-
-  const reRankedDocs = Object.keys(rrScores)
-    .sort((a, b) => rrScores[b] - rrScores[a])
-    .map((content) => docMapping[content]);
-
-  // console.log(rrScores, "\n", reRankedDocs);
+  const reRankedDocs = Object.keys(rrScore)
+    .sort((a, b) => rrScore[b] - rrScore[a])
+    .map((contents) => docMapping[contents]);
   return reRankedDocs;
 }
 
 async function runRAGFusion() {
   const userQuery = "Who designed the Eiffel Tower?";
-  const generatedQueries = await generateMultipleQueries(userQuery);
+  const alternateQueries = await generateMultipleQueries(userQuery);
 
-  const promisedQueries = generatedQueries.map((query) =>
-    vectorStore.similaritySearch(query, 2),
+  let vectorDocs = alternateQueries.map((docs) =>
+    vectorStore.similaritySearch(docs, 2),
   );
-  let vectorDocs = await Promise.all(promisedQueries);
-  const rerankedDocs = await reciprocalRankFusion(vectorDocs);
+  vectorDocs = await Promise.all(vectorDocs);
 
-  const context = rerankedDocs
+  const reRankedDocs = await reciprocalRankFusion(vectorDocs);
+  const context = reRankedDocs
     .slice(0, 2)
-    .map((doc) => doc.pageContent)
+    .map((docs) => docs.pageContent)
     .join("\n");
 
   const finalPrompt = ChatPromptTemplate.fromTemplate(
-    `Please answer the user query by only using the context below
+    `You are an AI assitent, Please answer the user query by using only the context given below.
     
     Context:
     {context}
@@ -115,10 +114,44 @@ async function runRAGFusion() {
     llm,
     new StringOutputParser(),
   ]);
-  const finalResult = await finalChain.invoke({
+  const result = await finalChain.invoke({
     context: context,
     query: userQuery,
   });
-  console.log("finalResult: ", finalResult);
+  console.log("result: ", result);
 }
 runRAGFusion().catch((err) => console.log("ERR: ", err));
+
+// Flow diagram
+// [ User Query ]
+//        │
+//        ▼
+// ┌────────────────────────────────────────┐
+// │ OpenAI Query Expansion                 │ (Generates 3-4 variations)
+// └────────────────────────────────────────┘
+//        │
+//    ┌───┼───┐
+//    ▼   ▼   ▼
+//  [Q1] [Q2] [Q3]  (Parallel Vector Search)
+//    │   │   │
+//    ▼   ▼   ▼
+//  [D1] [D2] [D3]  (Raw Document Results with original ranks)
+//    │   │   │
+//    └───┼───┘
+//        ▼
+// ┌────────────────────────────────────────┐
+// │ Reciprocal Rank Fusion (RRF) Algorithm │ (Calculates new scores based on rank)
+// └────────────────────────────────────────┘
+//        │
+//        ▼
+// ┌────────────────────────────────────────┐
+// │ Top-K Re-ranked Documents              │ (Highest scoring context chunks)
+// └────────────────────────────────────────┘
+//        │
+//        ▼
+// ┌────────────────────────────────────────┐
+// │ OpenAI Final Generation                │ (Synthesises answer using context)
+// └────────────────────────────────────────┘
+//        │
+//        ▼
+// [ Final Output ]
