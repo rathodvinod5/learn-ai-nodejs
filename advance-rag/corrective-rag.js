@@ -1,19 +1,19 @@
-import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
-import { Document } from "@langchain/core/documents";
-import { StringOutputParser } from "@langchain/core/output_parsers";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { RunnableSequence } from "@langchain/core/runnables";
+import "dotenv/config";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import "dotenv/config";
+import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
+import { Document } from "@langchain/core/documents";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { RunnableSequence } from "@langchain/core/runnables";
+import { StringOutputParser } from "@langchain/core/output_parsers";
 
 const embedding = new OpenAIEmbeddings({
   model: "text-embedding-3-small",
 });
 const llm = new ChatOpenAI({
   model: "gpt-4o-mini",
-  temperature: 0,
   apiKey: process.env.OPENAI_API_KEY,
+  temperature: 0,
 });
 
 async function main() {
@@ -40,52 +40,47 @@ async function main() {
     splittedDocs,
     embedding,
   );
+  const baseRetriever = vectorStore.asRetriever(2);
+
   const query = "What chip does the original Apple Vision Pro have?";
-  const answer1 = await runCorrectiveRAG(query, vectorStore);
-  console.log("\nFinal Output:\n", answer1);
+  let answer1 = await runCorrectiveRAG(query, baseRetriever);
+  console.log("\nfinal Result: \n", answer1, "\n");
 
   const query2 =
     "When is the Apple Vision Pro 2 releasing and what chip will it use?";
-  const answer2 = await runCorrectiveRAG(query2, vectorStore);
-  console.log(`\nFinal Output:\n`, answer2);
+  const answer2 = await runCorrectiveRAG(query2, baseRetriever);
+  console.log(`\nFinal Output:\n${answer2}\n`);
 }
 
-async function runCorrectiveRAG(userQuery, vectorStore) {
-  const baseRetriever = vectorStore.asRetriever(2);
-  const resultDocs = await baseRetriever.invoke(userQuery);
+async function runCorrectiveRAG(userQuery, baseRetriever) {
+  const documents = await baseRetriever.invoke(userQuery);
+  let context = documents.map((docs) => docs.pageContent).join("\n");
 
-  let context = resultDocs.map((doc) => doc.pageContent).join("\n");
   const status = await validateResult(context, userQuery);
-
-  //   console.log("context: ", context);
-  if (resultDocs.length <= 0 && !status) {
-    const searchResult = await mockWebSearch(userQuery);
-    context = `[Local Documents (Insufficient)]\n
-      ${retrievedDocs.map((doc) => doc.pageContent).join("\n")}\n\n
-      [Web Search Discovery]\n${searchResult}`;
+  if (documents.length <= 0 && !status) {
+    context = await mockWebSearch(userQuery);
   }
 
-  const generationPrompt = ChatPromptTemplate.fromTemplate(
-    `Answer the user query based strictly on the provided context. 
-    If the context contains both local data and web discoveries, synthesize them seamlessly.
+  const finalPrompt = ChatPromptTemplate.fromTemplate(
+    `You are an AI assitant, please answer the user query only by using context given below.
     
     Context:
     {context}
-    
-    Query: 
-    {query}
 
-    Answer:`,
+    User query:
+    {query}
+    `,
   );
-  const generationChain = RunnableSequence.from([
-    generationPrompt,
+  const finalChain = RunnableSequence.from([
+    finalPrompt,
     llm,
     new StringOutputParser(),
   ]);
-  const result = await generationChain.invoke({
+  const result = await finalChain.invoke({
     context: context,
     query: userQuery,
   });
+
   return result;
 }
 
@@ -99,17 +94,17 @@ async function mockWebSearch(query) {
 
 async function validateResult(context, query) {
   const validationPrompt = ChatPromptTemplate.fromTemplate(
-    `You are an accurate quality control grader, Evaluat if the provided context contains
-    sufficient information to answer the query.
+    `You are an accurate quality control grader, Evaluate if the provided context 
+    contains sufficient information to answer the user query
     
     Context:
     {context}
     
     User query:
     {query}
-       
-    Respond with exactly one word: "YES" if the context is highly relevant and sufficient, 
-    or "NO" if it is insufficient or missing key information.
+    
+    Respond with exactly one word: "YES" if the context is highly relevant 
+    and sufficient, or "NO" if it is insufficient or missing key information.
     `,
   );
   const validationChain = RunnableSequence.from([
@@ -117,12 +112,49 @@ async function validateResult(context, query) {
     llm,
     new StringOutputParser(),
   ]);
-  const result = await validationChain.invoke({
+  const status = await validationChain.invoke({
     context: context,
     query: query,
   });
-  console.log("result: ", result);
-  return result;
+  return status?.toLocaleLowerCase() === "yes";
 }
 
 main();
+
+//          +----------------------------------+
+//          |         User Query               |
+//          +----------------+-----------------+
+//                           |
+//                           v
+//          +----------------+-----------------+
+//          |   Retrieve Local Documents       |
+//          +----------------+-----------------+
+//                           |
+//                           v
+//          +----------------+-----------------+
+//          | Evaluator (LLM Grading Relevance)|
+//          +----------------+-----------------+
+//                           |
+//          +----------------+-----------------+
+//          | Are documents sufficient?        |
+//          +-------+------------------+-------+
+
+//                  |                  |
+//         YES (Accurate)         NO (Inaccurate/Missing)
+
+//                  |                  |
+//                  |                  v
+//                  |       +----------+-----------+
+//                  |       |  Web Search Trigger  |
+//                  |       | (Fallback/Knowledge) |
+//                  |       +----------+-----------+
+//                  |                  |
+//                  v                  v
+//          +-------+------------------+-------+
+//          |  Synthesize Consolidated Context |
+//          +----------------+-----------------+
+//                           |
+//                           v
+//          +----------------+-----------------+
+//          |     Generate Final Answer        |
+//          +----------------------------------+
